@@ -1,10 +1,7 @@
 import os
 import subprocess
 import uuid
-import torch
-import torchaudio
 import folder_paths
-from resemble_enhance.enhancer.inference import enhance, denoise
 
 class ResembleVideoAudioEnhancer:
     @classmethod
@@ -26,6 +23,10 @@ class ResembleVideoAudioEnhancer:
     CATEGORY = "AudioPostProduction"
 
     def process(self, video_path, mode, solver, nfe, lambd, tau):
+        import torch
+        import torchaudio
+        from resemble_enhance.enhancer.inference import enhance, denoise
+
         input_video = folder_paths.get_annotated_filepath(video_path)
         out_dir = folder_paths.get_output_directory()
         uid = uuid.uuid4().hex[:8]
@@ -34,13 +35,11 @@ class ResembleVideoAudioEnhancer:
         enhanced_audio = os.path.join(out_dir, f"enhanced_{uid}.wav")
         final_video = os.path.join(out_dir, f"enhanced_video_{uid}.mp4")
 
-        # 1) Extract audio
         subprocess.run(
             ["ffmpeg", "-y", "-i", input_video, "-vn", "-acodec", "pcm_s16le", raw_audio],
             check=True
         )
 
-        # 2) Enhance
         dwav, sr = torchaudio.load(raw_audio)
         dwav = dwav.mean(0)
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -53,7 +52,6 @@ class ResembleVideoAudioEnhancer:
 
         torchaudio.save(enhanced_audio, hwav[None], sr)
 
-        # 3) Remux (preserve video timestamps)
         subprocess.run([
             "ffmpeg", "-y",
             "-i", input_video,
@@ -63,7 +61,6 @@ class ResembleVideoAudioEnhancer:
             final_video
         ], check=True)
 
-        # Cleanup
         for p in (raw_audio, enhanced_audio):
             if os.path.exists(p):
                 os.remove(p)
