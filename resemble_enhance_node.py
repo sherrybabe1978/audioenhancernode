@@ -2,7 +2,13 @@ import os
 import subprocess
 import uuid
 import folder_paths
+import sys
+from unittest.mock import MagicMock
 from functools import lru_cache
+
+# Block deepspeed import chain
+sys.modules["deepspeed"] = MagicMock()
+sys.modules["deepspeed.runtime"] = MagicMock()
 
 class ResembleVideoAudioEnhancer:
     @classmethod
