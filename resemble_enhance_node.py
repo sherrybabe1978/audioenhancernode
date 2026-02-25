@@ -1,13 +1,9 @@
 # ============================================================
 # DEEPSPEED MOCK — must be first, before resemble_enhance
-# resemble_enhance/enhancer/train.py hardcodes:
-#   from deepspeed import DeepSpeedConfig
-# We don't need training, just inference — so we mock it out.
 # ============================================================
 import sys
 from unittest.mock import MagicMock
 
-# Create a mock deepspeed module with the attributes train.py needs
 _mock_deepspeed = MagicMock()
 _mock_deepspeed.DeepSpeedConfig = MagicMock()
 _mock_deepspeed.DeepSpeedEngine = MagicMock()
@@ -43,21 +39,33 @@ class ResembleVideoAudioEnhancer:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("enhanced_video_path",)
     FUNCTION = "process"
+    OUTPUT_NODE = True          # ← THIS is the key fix! Marks it as a terminal node
     CATEGORY = "audio"
 
     def process(self, video_path, mode, solver, nfe, lambd, tau):
-        # Import here (lazy) so mock is already in place
         from resemble_enhance.enhancer.inference import enhance, denoise
 
-        input_video = folder_paths.get_annotated_filepath(video_path)
+        # ── Resolve input path ──────────────────────────────────────────
+        # Handle full paths, relative paths, or just filenames
+        if os.path.isabs(video_path) and os.path.exists(video_path):
+            input_video = video_path
+        else:
+            # Strip any leading "input/" prefix
+            filename = os.path.basename(video_path)
+            input_dir = folder_paths.get_input_directory()
+            input_video = os.path.join(input_dir, filename)
+
+        if not os.path.exists(input_video):
+            raise FileNotFoundError(f"Video not found: {input_video}")
+
         out_dir = folder_paths.get_output_directory()
         uid = uuid.uuid4().hex[:8]
 
-        raw_audio = os.path.join(out_dir, f"raw_{uid}.wav")
+        raw_audio    = os.path.join(out_dir, f"raw_{uid}.wav")
         enhanced_audio = os.path.join(out_dir, f"enhanced_{uid}.wav")
-        final_video = os.path.join(out_dir, f"enhanced_video_{uid}.mp4")
+        final_video  = os.path.join(out_dir, f"enhanced_video_{uid}.mp4")
 
-        # Extract audio from video
+        # ── Extract audio ───────────────────────────────────────────────
         subprocess.run([
             "ffmpeg", "-y", "-i", input_video,
             "-vn", "-acodec", "pcm_s16le", raw_audio
@@ -67,7 +75,7 @@ class ResembleVideoAudioEnhancer:
         dwav = dwav.mean(0)
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        # Run enhancement
+        # ── Enhance ─────────────────────────────────────────────────────
         if mode == "denoise":
             hwav, sr_out = denoise(dwav, sr, device)
         else:
@@ -78,7 +86,7 @@ class ResembleVideoAudioEnhancer:
 
         torchaudio.save(enhanced_audio, hwav.unsqueeze(0), sr_out)
 
-        # Merge enhanced audio back into video
+        # ── Merge back into video ───────────────────────────────────────
         subprocess.run([
             "ffmpeg", "-y",
             "-i", input_video,
@@ -88,11 +96,12 @@ class ResembleVideoAudioEnhancer:
             final_video
         ], check=True)
 
-        # Cleanup temp files
+        # ── Cleanup ─────────────────────────────────────────────────────
         for p in (raw_audio, enhanced_audio):
             if os.path.exists(p):
                 os.remove(p)
 
+        print(f"✅ Enhanced video saved to: {final_video}")
         return (final_video,)
 
 
