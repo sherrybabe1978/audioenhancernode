@@ -13,6 +13,7 @@ sys.modules['deepspeed.runtime'] = MagicMock()
 sys.modules['deepspeed.runtime.config'] = MagicMock()
 sys.modules['deepspeed.ops'] = MagicMock()
 sys.modules['deepspeed.ops.adam'] = MagicMock()
+sys.modules['deepspeed.accelerator'] = MagicMock()
 # ============================================================
 
 import os
