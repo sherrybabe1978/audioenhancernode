@@ -1,14 +1,30 @@
+# ============================================================
+# DEEPSPEED MOCK — must be first, before resemble_enhance
+# resemble_enhance/enhancer/train.py hardcodes:
+#   from deepspeed import DeepSpeedConfig
+# We don't need training, just inference — so we mock it out.
+# ============================================================
+import sys
+from unittest.mock import MagicMock
+
+# Create a mock deepspeed module with the attributes train.py needs
+_mock_deepspeed = MagicMock()
+_mock_deepspeed.DeepSpeedConfig = MagicMock()
+_mock_deepspeed.DeepSpeedEngine = MagicMock()
+_mock_deepspeed.initialize = MagicMock()
+sys.modules['deepspeed'] = _mock_deepspeed
+sys.modules['deepspeed.runtime'] = MagicMock()
+sys.modules['deepspeed.runtime.config'] = MagicMock()
+sys.modules['deepspeed.ops'] = MagicMock()
+sys.modules['deepspeed.ops.adam'] = MagicMock()
+# ============================================================
+
 import os
 import subprocess
 import uuid
 import folder_paths
-import sys
-from unittest.mock import MagicMock
-from functools import lru_cache
-
-# Block deepspeed import chain
-sys.modules["deepspeed"] = MagicMock()
-sys.modules["deepspeed.runtime"] = MagicMock()
+import torch
+import torchaudio
 
 class ResembleVideoAudioEnhancer:
     @classmethod
@@ -29,27 +45,9 @@ class ResembleVideoAudioEnhancer:
     FUNCTION = "process"
     CATEGORY = "audio"
 
-    @lru_cache(maxsize=1)
-    def _load_enhancer(self, device="cuda", run_dir=None):
-        import torch
-        from resemble_enhance.enhancer.download import download
-        from resemble_enhance.enhancer.hparams import HParams
-        from resemble_enhance.enhancer.enhancer import Enhancer
-
-        run_dir = download(run_dir)
-        hp = HParams.load(run_dir)
-        model = Enhancer(hp)
-
-        ckpt = run_dir / "ds" / "G" / "default" / "mp_rank_00_model_states.pt"
-        state_dict = torch.load(ckpt, map_location="cpu")["module"]
-        model.load_state_dict(state_dict)
-        model.eval().to(device)
-        return model
-
     def process(self, video_path, mode, solver, nfe, lambd, tau):
-        import torch
-        import torchaudio
-        from resemble_enhance.inference import inference
+        # Import here (lazy) so mock is already in place
+        from resemble_enhance.enhancer.inference import enhance, denoise
 
         input_video = folder_paths.get_annotated_filepath(video_path)
         out_dir = folder_paths.get_output_directory()
@@ -59,21 +57,28 @@ class ResembleVideoAudioEnhancer:
         enhanced_audio = os.path.join(out_dir, f"enhanced_{uid}.wav")
         final_video = os.path.join(out_dir, f"enhanced_video_{uid}.mp4")
 
-        subprocess.run(["ffmpeg", "-y", "-i", input_video, "-vn", "-acodec", "pcm_s16le", raw_audio], check=True)
+        # Extract audio from video
+        subprocess.run([
+            "ffmpeg", "-y", "-i", input_video,
+            "-vn", "-acodec", "pcm_s16le", raw_audio
+        ], check=True)
 
         dwav, sr = torchaudio.load(raw_audio)
         dwav = dwav.mean(0)
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        model = self._load_enhancer(device=device)
+        # Run enhancement
         if mode == "denoise":
-            hwav, sr = inference(model=model.denoiser, dwav=dwav, sr=sr, device=device)
+            hwav, sr_out = denoise(dwav, sr, device)
         else:
-            model.configurate_(nfe=nfe, solver=solver, lambd=lambd, tau=tau)
-            hwav, sr = inference(model=model, dwav=dwav, sr=sr, device=device)
+            hwav, sr_out = enhance(
+                dwav, sr, device,
+                nfe=nfe, solver=solver, lambd=lambd, tau=tau
+            )
 
-        torchaudio.save(enhanced_audio, hwav[None], sr)
+        torchaudio.save(enhanced_audio, hwav.unsqueeze(0), sr_out)
 
+        # Merge enhanced audio back into video
         subprocess.run([
             "ffmpeg", "-y",
             "-i", input_video,
@@ -83,8 +88,18 @@ class ResembleVideoAudioEnhancer:
             final_video
         ], check=True)
 
+        # Cleanup temp files
         for p in (raw_audio, enhanced_audio):
             if os.path.exists(p):
                 os.remove(p)
 
         return (final_video,)
+
+
+NODE_CLASS_MAPPINGS = {
+    "ResembleVideoAudioEnhancer": ResembleVideoAudioEnhancer
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "ResembleVideoAudioEnhancer": "🎧 Resemble Video Audio Enhancer"
+}
