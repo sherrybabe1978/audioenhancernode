@@ -20,7 +20,7 @@ class ResembleVideoAudioEnhancer:
     RETURN_TYPES = ("STRING",)
     RETURN_NAMES = ("enhanced_video_path",)
     FUNCTION = "process"
-    CATEGORY = "AudioPostProduction"
+    CATEGORY = "audio"
 
     def process(self, video_path, mode, solver, nfe, lambd, tau):
         import torch
